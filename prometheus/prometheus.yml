@@ -1,0 +1,64 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    stack: observability-ia
+
+# Alertmanager targets
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load alert rules
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+
+  # Prometheus self-monitoring
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  # Host metrics
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+
+  # Container metrics
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+
+  # Alertmanager
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  # Loki
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  # Tempo
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+
+  # Grafana
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
+
+  # Ollama
+  - job_name: ollama
+    static_configs:
+      - targets: ["ollama:11434"]
+
+  # N8N
+  - job_name: n8n
+    static_configs:
+      - targets: ["n8n:5678"]
+    metrics_path: /metrics

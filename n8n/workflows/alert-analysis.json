@@ -1,0 +1,267 @@
+{
+  "name": "Alert Analysis — Alertmanager → Ollama → Grafana",
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "Alertmanager Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "webhookId": "alertmanager-webhook",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "alertmanager",
+        "authentication": "basicAuth",
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "1",
+          "name": "N8N Basic Auth"
+        }
+      }
+    },
+    {
+      "id": "n2",
+      "name": "Parse Alert Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "parameters": {
+        "jsCode": "// Parse Alertmanager webhook payload\nconst body = $input.first().json;\nconst alerts = body.alerts || [];\n\nconst parsed = alerts.map(alert => ({\n  alertname: alert.labels?.alertname || 'unknown',\n  severity:  alert.labels?.severity  || 'unknown',\n  category:  alert.labels?.category  || 'unknown',\n  instance:  alert.labels?.instance  || 'unknown',\n  job:       alert.labels?.job       || 'unknown',\n  status:    alert.status            || 'unknown',\n  startsAt:  alert.startsAt          || new Date().toISOString(),\n  endsAt:    alert.endsAt            || '',\n  summary:   alert.annotations?.summary     || '',\n  description: alert.annotations?.description || '',\n  generatorURL: alert.generatorURL   || ''\n}));\n\n// Only process firing alerts\nconst firing = parsed.filter(a => a.status === 'firing');\n\nif (firing.length === 0) {\n  return [{ json: { skip: true, reason: 'No firing alerts' } }];\n}\n\n// Build a combined summary for Ollama\nconst alertsSummary = firing.map(a =>\n  `• [${a.severity.toUpperCase()}] ${a.alertname} on ${a.instance}: ${a.summary}\\n  ${a.description}`\n).join('\\n\\n');\n\nreturn [{ json: { alerts: firing, alertsSummary, count: firing.length, skip: false } }];"
+      }
+    },
+    {
+      "id": "n3",
+      "name": "Skip if No Firing Alerts",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [480, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "n4",
+      "name": "Query Prometheus Context",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 200],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PROMETHEUS_HOST }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "=( 100 - (avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100) )"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "n5",
+      "name": "Query Memory",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 400],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PROMETHEUS_HOST }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      }
+    },
+    {
+      "id": "n6",
+      "name": "Merge Prometheus Metrics",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [960, 300],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "n7",
+      "name": "Build Ollama Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300],
+      "parameters": {
+        "jsCode": "// Combine context from Prometheus and the alert payload\n// Note: in a real multiplex merge the items arrive in pairs;\n// we grab available context gracefully.\nconst alertItem = $('Parse Alert Payload').first().json;\nconst cpuData = $('Query Prometheus Context').first()?.json;\nconst memData = $('Query Memory').first()?.json;\n\nconst cpuValue = cpuData?.data?.result?.[0]?.value?.[1] || 'N/A';\nconst memValue = memData?.data?.result?.[0]?.value?.[1] || 'N/A';\n\nconst cpuPct  = cpuValue !== 'N/A' ? parseFloat(cpuValue).toFixed(1) + '%' : 'N/A';\nconst memPct  = memValue !== 'N/A' ? parseFloat(memValue).toFixed(1) + '%' : 'N/A';\n\nconst now = new Date().toISOString();\n\nconst prompt = `You are an SRE (Site Reliability Engineer) assistant. Analyze the following Prometheus alerts and provide:\n1. A concise root-cause hypothesis (2-3 sentences)\n2. Immediate recommended actions (bullet list)\n3. Long-term prevention measures (bullet list)\n4. Estimated impact and urgency (1 sentence)\n\nCurrent system state:\n- CPU usage: ${cpuPct}\n- Memory usage: ${memPct}\n- Timestamp: ${now}\n\nFiring alerts (${alertItem.count}):\n${alertItem.alertsSummary}\n\nRespond in a structured, concise format. Be specific and actionable.`;\n\nreturn [{ json: { prompt, alerts: alertItem.alerts, cpuPct, memPct, now } }];"
+      }
+    },
+    {
+      "id": "n8",
+      "name": "Call Ollama API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OLLAMA_HOST }}/api/generate",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "={{ $env.OLLAMA_MODEL }}",
+          "prompt": "={{ $json.prompt }}",
+          "stream": false,
+          "options": {
+            "temperature": 0.3,
+            "num_predict": 512
+          }
+        },
+        "options": {
+          "timeout": 120000,
+          "response": {
+            "response": {
+              "fullResponse": false
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "n9",
+      "name": "Build Grafana Annotation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300],
+      "parameters": {
+        "jsCode": "const ollamaResponse = $input.first().json;\nconst promptCtx = $('Build Ollama Prompt').first().json;\n\nconst aiText = ollamaResponse?.response || 'AI analysis unavailable';\nconst alertNames = promptCtx.alerts.map(a => a.alertname).join(', ');\nconst severity = promptCtx.alerts.reduce((max, a) =>\n  a.severity === 'critical' ? 'critical' : max, 'warning');\n\nconst severityEmoji = severity === 'critical' ? '🔴' : '🟡';\n\nconst text = `${severityEmoji} **AI Alert Analysis** — ${alertNames}\\n\\n` +\n  `**System State:** CPU ${promptCtx.cpuPct} | Memory ${promptCtx.memPct}\\n\\n` +\n  `---\\n\\n${aiText}`;\n\nconst tags = ['ai-analysis', 'alert', severity, ...promptCtx.alerts.map(a => a.alertname)];\n\nreturn [{\n  json: {\n    text,\n    tags,\n    time: new Date().getTime(),\n    timeEnd: new Date().getTime() + 300000\n  }\n}];"
+      }
+    },
+    {
+      "id": "n10",
+      "name": "Post Grafana Annotation",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1920, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GRAFANA_HOST }}/api/annotations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "text": "={{ $json.text }}",
+          "tags": "={{ $json.tags }}",
+          "time": "={{ $json.time }}",
+          "timeEnd": "={{ $json.timeEnd }}"
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2",
+          "name": "Grafana Basic Auth"
+        }
+      }
+    },
+    {
+      "id": "n11",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2160, 300],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"message\": \"AI analysis complete\" }"
+      }
+    },
+    {
+      "id": "n12",
+      "name": "Respond Skipped",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [720, 500],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"skipped\", \"reason\": \"no firing alerts\" }"
+      }
+    }
+  ],
+  "connections": {
+    "Alertmanager Webhook": {
+      "main": [[{ "node": "Parse Alert Payload", "type": "main", "index": 0 }]]
+    },
+    "Parse Alert Payload": {
+      "main": [[{ "node": "Skip if No Firing Alerts", "type": "main", "index": 0 }]]
+    },
+    "Skip if No Firing Alerts": {
+      "main": [
+        [
+          { "node": "Query Prometheus Context", "type": "main", "index": 0 },
+          { "node": "Query Memory", "type": "main", "index": 0 }
+        ],
+        [{ "node": "Respond Skipped", "type": "main", "index": 0 }]
+      ]
+    },
+    "Query Prometheus Context": {
+      "main": [[{ "node": "Merge Prometheus Metrics", "type": "main", "index": 0 }]]
+    },
+    "Query Memory": {
+      "main": [[{ "node": "Merge Prometheus Metrics", "type": "main", "index": 1 }]]
+    },
+    "Merge Prometheus Metrics": {
+      "main": [[{ "node": "Build Ollama Prompt", "type": "main", "index": 0 }]]
+    },
+    "Build Ollama Prompt": {
+      "main": [[{ "node": "Call Ollama API", "type": "main", "index": 0 }]]
+    },
+    "Call Ollama API": {
+      "main": [[{ "node": "Build Grafana Annotation", "type": "main", "index": 0 }]]
+    },
+    "Build Grafana Annotation": {
+      "main": [[{ "node": "Post Grafana Annotation", "type": "main", "index": 0 }]]
+    },
+    "Post Grafana Annotation": {
+      "main": [[{ "node": "Respond OK", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": ["observability", "ai", "alerting"],
+  "meta": {
+    "instanceId": "observability-ia"
+  }
+}

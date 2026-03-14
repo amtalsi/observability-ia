@@ -1,0 +1,244 @@
+{
+  "name": "Periodic AI Health Report — Daily/Weekly",
+  "nodes": [
+    {
+      "id": "r1",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 300],
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "r2",
+      "name": "Query CPU 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 100],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PROMETHEUS_HOST }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "avg_over_time((100 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)[24h:5m])"
+            }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+    {
+      "id": "r3",
+      "name": "Query Memory 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PROMETHEUS_HOST }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "avg_over_time(((1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100)[24h:5m])"
+            }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+    {
+      "id": "r4",
+      "name": "Query Alerts Fired 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PROMETHEUS_HOST }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "count_over_time(ALERTS{alertstate=\"firing\"}[24h])"
+            }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+    {
+      "id": "r5",
+      "name": "Query Error Logs 24h",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 700],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.LOKI_HOST }}/loki/api/v1/query_range",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "sum(count_over_time({service=~\".+\"} |= \"error\" [1h]))" },
+            { "name": "start", "value": "={{ Math.floor((Date.now() - 86400000) / 1000) }}" },
+            { "name": "end",   "value": "={{ Math.floor(Date.now() / 1000) }}" },
+            { "name": "step",  "value": "3600" }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+    {
+      "id": "r6",
+      "name": "Query Services Up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 100],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.PROMETHEUS_HOST }}/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "avg_over_time(up[24h])"
+            }
+          ]
+        },
+        "options": { "timeout": 15000 }
+      }
+    },
+    {
+      "id": "r7",
+      "name": "Build Report Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 400],
+      "parameters": {
+        "jsCode": "// Aggregate all metrics for the 24-hour report\nconst cpuResult  = $('Query CPU 24h').first()?.json?.data?.result?.[0]?.value?.[1];\nconst memResult  = $('Query Memory 24h').first()?.json?.data?.result?.[0]?.value?.[1];\nconst alertCount = $('Query Alerts Fired 24h').first()?.json?.data?.result?.length || 0;\nconst svcResults = $('Query Services Up').first()?.json?.data?.result || [];\n\n// Error log counts per hour\nconst errorValues = $('Query Error Logs 24h').first()?.json?.data?.result?.[0]?.values || [];\nconst totalErrors = errorValues.reduce((sum, v) => sum + parseInt(v[1] || '0', 10), 0);\nconst peakErrors  = Math.max(...errorValues.map(v => parseInt(v[1] || '0', 10)), 0);\n\n// Service availability\nconst services = svcResults.map(r => ({\n  job: r.metric?.job || 'unknown',\n  instance: r.metric?.instance || 'unknown',\n  availability: (parseFloat(r.value?.[1] || '0') * 100).toFixed(1)\n}));\nconst servicesTable = services.map(s =>\n  `  - ${s.job} (${s.instance}): ${s.availability}% uptime`\n).join('\\n');\n\nconst cpuAvg = cpuResult  ? parseFloat(cpuResult).toFixed(1)  + '%' : 'N/A';\nconst memAvg = memResult  ? parseFloat(memResult).toFixed(1)  + '%' : 'N/A';\n\nconst reportDate = new Date().toLocaleDateString('en-US', {\n  weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'\n});\n\nconst prompt = `You are an SRE analyst generating a daily infrastructure health report. Summarize the past 24 hours based on the metrics below and provide actionable insights.\n\n## Daily Report — ${reportDate}\n\n### System Metrics (24-hour average)\n- Average CPU usage: ${cpuAvg}\n- Average Memory usage: ${memAvg}\n- Total error log entries: ${totalErrors}\n- Peak error logs (per hour): ${peakErrors}\n- Alert events fired: ${alertCount}\n\n### Service Availability\n${servicesTable || '  - No data available'}\n\nBased on this data, please provide:\n1. **Overall health assessment** (1-2 sentences, use: Healthy / Warning / Critical)\n2. **Key findings** (3-5 bullet points about notable trends or issues)\n3. **Risks identified** (potential problems if current trends continue)\n4. **Recommendations** (prioritized action items)\n5. **Forecast** (expected behavior in the next 24 hours based on trends)\n\nKeep the report concise, factual, and actionable. Format it clearly.`;\n\nreturn [{ json: { prompt, cpuAvg, memAvg, totalErrors, peakErrors, alertCount, services, reportDate } }];"
+      }
+    },
+    {
+      "id": "r8",
+      "name": "Call Ollama for Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [960, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.OLLAMA_HOST }}/api/generate",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "model": "={{ $env.OLLAMA_MODEL }}",
+          "prompt": "={{ $json.prompt }}",
+          "stream": false,
+          "options": {
+            "temperature": 0.2,
+            "num_predict": 1024
+          }
+        },
+        "options": {
+          "timeout": 180000
+        }
+      }
+    },
+    {
+      "id": "r9",
+      "name": "Build Report Annotation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 400],
+      "parameters": {
+        "jsCode": "const ollamaResponse = $input.first().json;\nconst ctx = $('Build Report Prompt').first().json;\n\nconst aiReport = ollamaResponse?.response || 'AI report generation failed';\n\nconst header = `📊 **Daily Infrastructure Report** — ${ctx.reportDate}\\n\\n` +\n  `**Summary:** CPU avg ${ctx.cpuAvg} | Memory avg ${ctx.memAvg} | ` +\n  `${ctx.totalErrors} errors | ${ctx.alertCount} alerts fired\\n\\n---\\n\\n`;\n\nconst text = header + aiReport;\n\nconst tags = ['ai-report', 'daily-report', 'infrastructure'];\n\nconst now = Date.now();\n\nreturn [{ json: { text, tags, time: now, timeEnd: now + 3600000 } }];"
+      }
+    },
+    {
+      "id": "r10",
+      "name": "Post Report to Grafana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1440, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GRAFANA_HOST }}/api/annotations",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "text": "={{ $json.text }}",
+          "tags": "={{ $json.tags }}",
+          "time": "={{ $json.time }}",
+          "timeEnd": "={{ $json.timeEnd }}"
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "2",
+          "name": "Grafana Basic Auth"
+        }
+      }
+    },
+    {
+      "id": "r11",
+      "name": "Log Completion",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 400],
+      "parameters": {
+        "jsCode": "const ctx = $('Build Report Prompt').first().json;\nconsole.log(`[AI Report] Daily report generated for ${ctx.reportDate}. CPU: ${ctx.cpuAvg}, Mem: ${ctx.memAvg}, Errors: ${ctx.totalErrors}`);\nreturn [{ json: { status: 'complete', reportDate: ctx.reportDate } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          { "node": "Query CPU 24h",         "type": "main", "index": 0 },
+          { "node": "Query Memory 24h",       "type": "main", "index": 0 },
+          { "node": "Query Alerts Fired 24h", "type": "main", "index": 0 },
+          { "node": "Query Error Logs 24h",   "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "Query CPU 24h":         { "main": [[{ "node": "Query Services Up",   "type": "main", "index": 0 }]] },
+    "Query Memory 24h":      { "main": [[{ "node": "Build Report Prompt", "type": "main", "index": 1 }]] },
+    "Query Alerts Fired 24h":{ "main": [[{ "node": "Build Report Prompt", "type": "main", "index": 2 }]] },
+    "Query Error Logs 24h":  { "main": [[{ "node": "Build Report Prompt", "type": "main", "index": 3 }]] },
+    "Query Services Up":     { "main": [[{ "node": "Build Report Prompt", "type": "main", "index": 0 }]] },
+    "Build Report Prompt":   { "main": [[{ "node": "Call Ollama for Report",   "type": "main", "index": 0 }]] },
+    "Call Ollama for Report":{ "main": [[{ "node": "Build Report Annotation",  "type": "main", "index": 0 }]] },
+    "Build Report Annotation":{ "main": [[{ "node": "Post Report to Grafana",  "type": "main", "index": 0 }]] },
+    "Post Report to Grafana": { "main": [[{ "node": "Log Completion",           "type": "main", "index": 0 }]] }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "tags": ["observability", "ai", "reporting"],
+  "meta": {
+    "instanceId": "observability-ia"
+  }
+}

@@ -1,0 +1,23 @@
+# Ignore generated data volumes and secrets
+data/
+volumes/
+
+# Docker override with local secrets
+docker-compose.override.yml
+
+# Environment file with real secrets (keep .env.example)
+.env
+
+# Grafana plugins downloaded at runtime
+grafana/plugins/
+
+# N8N encryption key files
+n8n/.n8n/
+
+# OS artefacts
+.DS_Store
+Thumbs.db
+
+# Editor config
+.vscode/
+.idea/
