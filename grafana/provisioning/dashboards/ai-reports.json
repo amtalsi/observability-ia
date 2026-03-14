@@ -1,0 +1,219 @@
+{
+  "title": "AI Observability Reports",
+  "uid": "ai-reports",
+  "description": "Rapports d'analyse automatique générés par l'agent AI (LangChain + llama3.1:8b)",
+  "tags": ["ai", "observability", "reports"],
+  "editable": true,
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "browser",
+  "graphTooltip": 0,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Analyses",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS value FROM ai_reports",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Analyses (24h)",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS value FROM ai_reports WHERE created_at > NOW() - INTERVAL '24 hours'",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Dernière Sévérité",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "ok":       { "text": "OK",       "color": "green"  } } },
+            { "type": "value", "options": { "warning":  { "text": "WARNING",  "color": "orange" } } },
+            { "type": "value", "options": { "critical": { "text": "CRITICAL", "color": "red"    } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green",  "value": null },
+              { "color": "orange", "value": 1 },
+              { "color": "red",    "value": 2 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT severity AS value FROM ai_reports ORDER BY created_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Alertes Analysées",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS value FROM ai_reports WHERE trigger_type = 'alert'",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Fréquence des analyses",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2 } },
+        "overrides": []
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list" } },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT $__timeGroupAlias(created_at, '15m'), trigger_type AS metric, COUNT(*) AS value FROM ai_reports WHERE $__timeFilter(created_at) GROUP BY 1, 2 ORDER BY 1",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Rapports récents",
+      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 10 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "options": {
+        "sortBy": [{ "displayName": "Heure", "desc": true }],
+        "cellHeight": "sm",
+        "footer": { "show": false }
+      },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left", "cellOptions": { "type": "auto" } } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Sévérité" },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": { "type": "color-background" }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "type": "value", "options": { "ok":       { "text": "✅ OK",       "color": "green"  } } },
+                  { "type": "value", "options": { "warning":  { "text": "⚠️ WARNING",  "color": "orange" } } },
+                  { "type": "value", "options": { "critical": { "text": "🔴 CRITICAL", "color": "red"    } } }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Résumé" },
+            "properties": [
+              { "id": "custom.width", "value": 350 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Heure" },
+            "properties": [
+              { "id": "custom.width", "value": 160 }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT to_char(created_at AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS \"Heure\", trigger_type AS \"Déclencheur\", alert_name AS \"Alerte\", severity AS \"Sévérité\", summary AS \"Résumé\", ROUND(duration_seconds::numeric, 1) AS \"Durée(s)\" FROM ai_reports ORDER BY created_at DESC LIMIT 50",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Dernière analyse – Détail",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "postgres", "uid": "observability-postgres" },
+      "options": { "cellHeight": "md", "footer": { "show": false } },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "left", "wrap": true } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Analyse" },
+            "properties": [ { "id": "custom.width", "value": 600 } ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Recommandations" },
+            "properties": [ { "id": "custom.width", "value": 400 } ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "rawSql": "SELECT to_char(created_at AT TIME ZONE 'Europe/Paris', 'YYYY-MM-DD HH24:MI') AS \"Heure\", alert_name AS \"Alerte\", severity AS \"Sévérité\", analysis AS \"Analyse\", recommendations AS \"Recommandations\" FROM ai_reports ORDER BY created_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

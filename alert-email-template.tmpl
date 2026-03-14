@@ -1,0 +1,8 @@
+{{ define "email.subject" }}[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}{{ end }}
+{{ define "email.body" }}
+{{ range .Alerts }}
+Alert: {{ .Annotations.summary }}
+Description: {{ .Annotations.description }}
+Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+{{ end }}
+{{ end }}

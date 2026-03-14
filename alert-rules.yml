@@ -1,0 +1,38 @@
+groups:
+  - name: app
+    rules:
+      - alert: ApiDown
+        expr: up{job="api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API service is down"
+          description: "The api container has been unreachable for more than 1 minute."
+
+      - alert: HighHttpErrorRate
+        expr: |
+          rate(http_requests_total{job="api", status=~"5.."}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP 5xx error rate on API"
+          description: "More than 5% of requests are returning 5xx errors."
+
+      - alert: PostgresExporterDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL exporter is down"
+
+      - alert: WorkerDown
+        expr: up{job="worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker service is down"
+          description: "The worker container has been unreachable for more than 1 minute."

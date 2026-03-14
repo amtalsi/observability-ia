@@ -1,0 +1,60 @@
+{
+  "name": "obs-logs",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "logs",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-logs",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://loki:3100/loki/api/v1/query_range",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "={{ $json.body.query }}" },
+            { "name": "limit",  "value": "={{ $json.body.limit ?? 50 }}" },
+            { "name": "start",  "value": "={{ $json.body.start ?? (Date.now() - 3600000) + '000000' }}" },
+            { "name": "end",    "value": "={{ $json.body.end   ?? Date.now() + '000000' }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "loki-query",
+      "name": "Loki Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "respond-logs",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Loki Query", "type": "main", "index": 0 }]]
+    },
+    "Loki Query": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" }
+}

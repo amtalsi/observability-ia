@@ -1,0 +1,57 @@
+{
+  "name": "obs-metrics",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "metrics",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-metrics",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "url": "=http://prometheus:9090/api/v1/query",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "query", "value": "={{ $json.body.query }}" }
+          ]
+        },
+        "options": {}
+      },
+      "id": "prometheus-query",
+      "name": "Prometheus Query",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "respond-metrics",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Prometheus Query", "type": "main", "index": 0 }]]
+    },
+    "Prometheus Query": {
+      "main": [[{ "node": "Respond", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": true,
+  "settings": { "executionOrder": "v1" }
+}
